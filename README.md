@@ -137,9 +137,13 @@ ngrok 무료 플랜은 터널을 동시에 하나만 열 수 있다.
 Colab GPU(T4 등)에서 서버를 띄우고 ngrok HTTPS 주소로 외부에서 테스트한다.
 노트북 [`colab/streaming_asr1_colab.ipynb`](colab/streaming_asr1_colab.ipynb) 를 Colab 에서 열고 위에서부터 실행하면 된다.
 
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/cheetah31/streaming-asr/blob/env/colab/colab/streaming_asr1_colab.ipynb)
+
 1. 런타임 유형 → **GPU**
-2. Colab 보안 비밀에 `NGROK_AUTHTOKEN` 등록 (선택: `NGROK_DOMAIN` 고정 도메인, `GITHUB_TOKEN` 비공개 저장소 clone)
-3. 노트북의 `REPO_URL` 을 이 저장소 주소로 바꾼다
+2. Colab 보안 비밀에 `NGROK_AUTHTOKEN` 등록 (선택: `NGROK_DOMAIN` 고정 도메인)
+
+저장소는 공개(`https://github.com/cheetah31/streaming-asr.git`)로 가정하므로 GitHub 토큰은 필요 없다.
+clone 할 때 `GIT_LFS_SKIP_SMUDGE=1` 로 Windows 런타임 DLL(LFS)은 받지 않는다 (Colab 에서는 쓰지 않음).
 
 노트북이 하는 일:
 - `scripts/colab_setup.sh` — uv 설치, `uv sync --extra colab`(ngrok SDK), `uv run streaming-asr1-setup`(linux-x86_64-cuda 런타임 + 모델 + `.env`)
@@ -156,7 +160,7 @@ Colab GPU(T4 등)에서 서버를 띄우고 ngrok HTTPS 주소로 외부에서 �
 노트북 없이 Colab 터미널(또는 셀)에서 직접 실행할 때:
 
 ```bash
-git clone -b env/colab <저장소 주소> streaming-asr1 && cd streaming-asr1
+GIT_LFS_SKIP_SMUDGE=1 git clone -b env/colab https://github.com/cheetah31/streaming-asr.git streaming-asr1 && cd streaming-asr1
 bash scripts/colab_setup.sh
 NGROK_AUTHTOKEN=<토큰> uv run streaming-asr1 --ngrok
 ```
