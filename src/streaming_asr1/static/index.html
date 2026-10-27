@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>실시간 STT</title>
+  <style>
+    :root { --bg:#fafafa; --fg:#1d1d1f; --muted:#888; --accent:#2563eb; --danger:#dc2626; --card:#fff; --line:#e5e5e5; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg:#141414; --fg:#eee; --muted:#888; --card:#1e1e1e; --line:#333; }
+    }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: system-ui, "Malgun Gothic", sans-serif; background:var(--bg); color:var(--fg); }
+    main { max-width: 820px; margin: 0 auto; padding: 24px 16px; }
+    h1 { font-size: 1.4rem; margin: 0 0 16px; }
+    .bar { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:16px; }
+    button { font-size:1rem; padding:10px 20px; border:0; border-radius:8px; background:var(--accent); color:#fff; cursor:pointer; }
+    button.rec { background:var(--danger); }
+    button.secondary { background:transparent; color:var(--fg); border:1px solid var(--line); }
+    select { font-size:1rem; padding:8px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--fg); }
+    .meter { width:120px; height:8px; background:var(--line); border-radius:4px; overflow:hidden; }
+    .meter > div { height:100%; width:0; background:#22c55e; transition: width 60ms; }
+    #status { color:var(--muted); font-size:.9rem; }
+    #transcript { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; min-height:300px; line-height:1.7; font-size:1.1rem; }
+    .line { margin: 0 0 6px; }
+    .line .t { color:var(--muted); font-size:.8rem; margin-right:8px; font-variant-numeric: tabular-nums; }
+    .partial { color:var(--muted); font-style: italic; }
+    .err { color:var(--danger); font-size:.9rem; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>실시간 STT · Nemotron 3.5 ASR (NeMo-Speech.cpp)</h1>
+  <div class="bar">
+    <button id="toggle">녹음 시작</button>
+    <select id="lang" title="인식 언어">
+      <option value="auto">자동 감지</option>
+      <option value="ko-KR" selected>한국어</option>
+      <option value="en-US">English</option>
+      <option value="ja-JP">日本語</option>
+      <option value="zh-CN">中文</option>
+    </select>
+    <button id="clear" class="secondary">지우기</button>
+    <div class="meter" title="입력 레벨"><div id="level"></div></div>
+    <span id="status">대기 중</span>
+  </div>
+  <div id="transcript"><p class="line partial" id="partial"></p></div>
+</main>
+
+<script>
+const TARGET_RATE = 16000;
+const $ = (id) => document.getElementById(id);
+
+// 마이크 오디오(보통 48kHz float32)를 16kHz int16 PCM 으로 변환해 ~100ms 단위로 전달하는 워클릿
+const WORKLET = `
+class PcmWorklet extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.ratio = sampleRate / ${TARGET_RATE};
+    this.pos = 0;
+    this.buf = new Int16Array(${TARGET_RATE / 10});
+    this.n = 0;
+  }
+  process(inputs) {
+    const ch = inputs[0][0];
+    if (!ch) return true;
+    // 선형 보간 리샘플링
+    while (this.pos < ch.length - 1) {
+      const i = Math.floor(this.pos), f = this.pos - i;
+      const s = Math.max(-1, Math.min(1, ch[i] * (1 - f) + ch[i + 1] * f));
+      this.buf[this.n++] = s < 0 ? s * 0x8000 : s * 0x7fff;
+      if (this.n === this.buf.length) {
+        this.port.postMessage(this.buf.slice().buffer, []);
+        this.n = 0;
+      }
+      this.pos += this.ratio;
+    }
+    this.pos -= ch.length;
+    return true;
+  }
+}
+registerProcessor('pcm-worklet', PcmWorklet);
+`;
+
+let ws, ctx, stream, node, source;
+let recording = false;
+const lines = new Map(); // utterance id -> element
+let startedAt = 0;
+
+function setStatus(s) { $('status').textContent = s; }
+
+function fmtTime(ms) {
+  const s = Math.floor(ms / 1000);
+  return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+}
+
+function setPartial(text) { $('partial').textContent = text; }
+
+function addFinal(id, text) {
+  if (!text) return;
+  const p = document.createElement('p');
+  p.className = 'line';
+  p.innerHTML = `<span class="t">${fmtTime(Date.now() - startedAt)}</span>`;
+  p.append(document.createTextNode(text));
+  $('transcript').insertBefore(p, $('partial'));
+  lines.set(id, p);
+}
+
+function addError(msg) {
+  const p = document.createElement('p');
+  p.className = 'line err';
+  p.textContent = '⚠ ' + msg;
+  $('transcript').insertBefore(p, $('partial'));
+}
+
+let lastFinalId = -1;
+function onMessage(ev) {
+  const m = JSON.parse(ev.data);
+  switch (m.type) {
+    case 'ready': setStatus('듣는 중…'); break;
+    case 'speech_start': setStatus('말하는 중…'); break;
+    case 'partial': if (m.id > lastFinalId) setPartial(m.text); break;
+    case 'final':
+      lastFinalId = Math.max(lastFinalId, m.id);
+      setPartial(''); addFinal(m.id, m.text); setStatus(recording ? '듣는 중…' : '대기 중'); break;
+    case 'discard': setPartial(''); setStatus(recording ? '듣는 중…' : '대기 중'); break;
+    case 'error': addError(m.message); break;
+  }
+}
+
+async function start() {
+  stream = await navigator.mediaDevices.getUserMedia({
+    audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+  });
+  ctx = new AudioContext();
+  await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET], { type: 'application/javascript' })));
+  source = ctx.createMediaStreamSource(stream);
+  node = new AudioWorkletNode(ctx, 'pcm-worklet');
+
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const lang = $('lang').value;
+  ws = new WebSocket(`${proto}://${location.host}/ws/transcribe?language=${encodeURIComponent(lang)}`);
+  ws.binaryType = 'arraybuffer';
+  ws.onmessage = onMessage;
+  ws.onclose = () => { if (recording) { stop(); addError('서버 연결이 끊어졌습니다.'); } };
+  await new Promise((res, rej) => { ws.onopen = res; ws.onerror = () => rej(new Error('WebSocket 연결 실패')); });
+
+  node.port.onmessage = (e) => {
+    const pcm = new Int16Array(e.data);
+    let sum = 0;
+    for (let i = 0; i < pcm.length; i++) sum += (pcm[i] / 32768) ** 2;
+    const db = 10 * Math.log10(sum / pcm.length + 1e-10);
+    $('level').style.width = `${Math.max(0, Math.min(100, (db + 70) * 1.6))}%`;
+    if (ws.readyState === WebSocket.OPEN) ws.send(e.data);
+  };
+  source.connect(node);
+  startedAt = Date.now();
+  recording = true;
+  $('toggle').textContent = '녹음 중지';
+  $('toggle').classList.add('rec');
+  $('lang').disabled = true;
+}
+
+function stop() {
+  recording = false;
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'stop' }));
+    const w = ws;
+    setTimeout(() => w.close(), 10000); // 마지막 최종 결과를 받을 시간을 둔다
+  }
+  source?.disconnect(); node?.disconnect();
+  stream?.getTracks().forEach((t) => t.stop());
+  ctx?.close();
+  $('level').style.width = '0';
+  $('toggle').textContent = '녹음 시작';
+  $('toggle').classList.remove('rec');
+  $('lang').disabled = false;
+  setStatus('마무리 중…');
+}
+
+$('toggle').onclick = async () => {
+  if (recording) return stop();
+  try { lastFinalId = -1; await start(); }
+  catch (e) { addError(e.message || String(e)); stop(); setStatus('대기 중'); }
+};
+$('clear').onclick = () => {
+  document.querySelectorAll('#transcript .line:not(#partial)').forEach((el) => el.remove());
+  setPartial('');
+};
+</script>
+</body>
+</html>
