@@ -236,3 +236,7 @@ $RECYCLE.BIN/
 logs/
 
 # End of https://www.toptal.com/developers/gitignore/api/windows,linux,python,visualstudiocode
+# 런타임 / 모델 (streaming-asr1-setup 이 받음)
+vendor/nemo-speech/
+models/
+server.log

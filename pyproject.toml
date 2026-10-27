@@ -16,6 +16,12 @@ dependencies = [
 
 [project.scripts]
 streaming-asr1 = "streaming_asr1:main"
+streaming-asr1-setup = "streaming_asr1.setup_runtime:main"
+
+[project.optional-dependencies]
+colab = [
+    "ngrok>=1.7.0",
+]
 
 [build-system]
 requires = ["uv_build>=0.12.3,<0.13.0"]

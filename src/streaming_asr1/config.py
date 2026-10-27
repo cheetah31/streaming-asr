@@ -1,8 +1,10 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from .setup_runtime import default_lib_dir
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -13,7 +15,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     # NeMo-Speech.cpp 런타임 / 모델
-    nemo_lib_dir: Path = Path("vendor/nemo-speech-cuda/bin")  # nemo_speech_asr_c.dll 이 있는 폴더
+    # libnemo_speech_asr_c(.dll/.so/.dylib) 가 있는 폴더. 기본값: streaming-asr1-setup 으로 설치한 런타임
+    nemo_lib_dir: Path = Field(default_factory=default_lib_dir)
     asr_model_path: Path  # nemotron-3.5-asr-streaming-0.6b.q8_0.gguf
     asr_gpu: int = 0  # -1 = CPU
     asr_right_context: int = 1  # 0,1,3,6,13 (x80ms 프레임). 클수록 정확하지만 지연이 늘어난다
@@ -29,6 +32,10 @@ class Settings(BaseSettings):
     # 로그 (날짜별 파일: logs/streaming-asr1-YYYY-MM-DD.log)
     log_dir: Path = Path("logs")
     log_retention_days: int = 30  # 이보다 오래된 로그 파일은 삭제
+
+    # ngrok 터널 (streaming-asr1 --ngrok)
+    ngrok_authtoken: str | None = None  # https://dashboard.ngrok.com/get-started/your-authtoken
+    ngrok_domain: str | None = None  # 고정 도메인 (예: xxx.ngrok-free.app). 없으면 실행마다 임의 주소
 
     @field_validator("nemo_lib_dir", "asr_model_path", "log_dir", "speech_context_path")
     @classmethod

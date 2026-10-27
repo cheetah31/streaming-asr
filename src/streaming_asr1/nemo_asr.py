@@ -119,7 +119,7 @@ def _load_library(lib_dir: str | os.PathLike) -> C.CDLL:
         name = "libnemo_speech_asr_c.so"
     path = lib_dir / name
     if not path.exists():
-        raise NemoASRError(f"NeMo-Speech 라이브러리를 찾을 수 없습니다: {path}")
+        raise NemoASRError(f"NeMo-Speech 라이브러리를 찾을 수 없습니다: {path} (uv run streaming-asr1-setup 으로 설치)")
     lib = C.CDLL(str(path))
 
     def sig(fn: str, restype, *argtypes):
